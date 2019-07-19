@@ -2,7 +2,6 @@ CXX := g++
 
 # LLVM C++ options and LLVM link options
 LLVM_CXXFLAGS := $(shell llvm-config --cxxflags)
-#LLVMLDFLAGS := $(shell llvm-config --ldflags) -L/home/codesearch/.jumbo/lib 
 LLVMLDFLAGS := $(shell llvm-config --ldflags)
 CXXFLAGS := $(LLVM_CXXFLAGS)
 
