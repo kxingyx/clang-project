@@ -1,0 +1,128 @@
+
+## why standalone
+
+
+
+在上一章中，我们了解到在传递给cmake恰当的参数后， 直接make clang-xx，就能获得已有的clang工具，这其中就包含进行代码索引的indexer，
+
+
+但官方提供的indexer无论是输入、输出格式，或是用户关心的字段的解析都无可定制参数，
+所以，基于这些代码，完成一次out-of-tree的编译，开发符合我们自己的indexer是至关重要的。
+
+
+也就是说，要想发展使用clang的技术，必需要做到的就是脱离LLVM源码，仅依赖LLVM的lib库和头文件，设计和实现自己的索引器(或其他工具)。
+
+
+虽然clang技术被广泛使用，但国内还没有一篇介绍像样的文章介绍如何开始（至少我还没搜到基于clang8.0的靠谱中文资料），本文算是开创先例并给出可运行的 ***代码*** 。
+
+
+万里长征第一步，写出自己的编译脚本，并且找到我们需要哪些lib和哪些头文件，让我们开始吧！
+
+
+## build app out-of-tree
+
+
+
+
+正如[clang安装](https://github.com/kxingyx/clang-project/wiki/%E5%A6%82%E4%BD%95%E7%BC%96%E8%AF%91%E5%AE%89%E8%A3%85LLVM%E5%92%8CClang)中所提到的，有三种使用clang的手段，本章介绍的是如何使用libclang、libtooling、clangd对一个可编译的cpp代码进行索引。
+
+
+
+
+
+### clang-c/index
+
+
+
+
+clang是一个很棒的生态，源码中提供了一个基于libclang的indexer实现，[源码在这](https://github.com/llvm-mirror/clang/tree/master/tools/c-index-test)， 但它的cmake依赖过多的LLVM环境，直接拿出来编译是无法工作的。
+
+
+
+
+我们将代码[c-index-test.c](https://github.com/llvm-mirror/clang/blob/master/tools/c-index-test/c-index-test.c) 和 [core_main.cpp](https://github.com/llvm-mirror/clang/blob/master/tools/c-index-test/core_main.cpp)下载到本地workspace下，
+然后, 重头戏就是如何写这个makefile， 先直接公布答案，然后逐条讲解。
+```shell
+cmake_minimum_required (VERSION 3.4.3)
+project (DemoIndexer)
+
+find_package(LLVM REQUIRED CONFIG)
+find_package(Clang REQUIRED CONFIG)
+
+add_definitions(
+-D__STDC_LIMIT_MACROS
+-D__STDC_CONSTANT_MACROS
+)
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-rtti -std=c++11 -fPIC")
+
+message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
+message(STATUS "Using LLVMConfig.cmake in: ${LLVM_DIR}")
+message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
+
+message("LLVM_INCLUDE_DIRS=${LLVM_INCLUDE_DIRS}")
+message("LLVM_DEFINITIONS=${LLVM_DEFINITIONS}")
+message("LLVM_LIB_DIRS=${LLVM_LIBRARY_DIR}")
+message("Clang_LIB_DIRS=${CLANG_INSTALL_PREFIX}")
+message("Clang_INCLUDES=${CLANG_INCLUDE_DIRS}")
+
+
+link_directories(${LLVM_LIBRARY_DIR})
+link_directories(/home/xxx/local/libxml2/lib/)
+link_directories(/home/xxxx/lib/)
+
+include_directories(${LLVM_INCLUDE_DIRS})
+include_directories(/home/xxx/local/libxml2/include/libxml2)
+add_definitions(${LLVM_DEFINITIONS})
+message("llvm-def:${LLVM_DEFINITIONS}")
+
+include_directories(${LIBXML2_INCLUDE_DIRS})
+set_property(
+    SOURCE c-index-test.c
+    PROPERTY COMPILE_FLAGS "-std=gnu89"
+    )
+add_executable(DemoIndexer core_main.cpp c-index-test.c)
+
+target_link_libraries(DemoIndexer
+    libclang
+    clangAST
+    clangBasic
+    clangCodeGen
+    clangFrontend
+    clangIndex
+    clangSerialization
+z rt dl tinfo pthread m xml2
+)
+```
+<br>
+很明显，这是一个CMake格式的CMakeLists.txt，我们逐行解释。
+
+
+
+
+ * 首行的`cmake_minimum_required`指定了最小需要的cmake版本，3.4.3不是随便写的，follow clang的。<br><br>
+ *  `find_package`是cmake内置的语法，大致略等于BCLOUD中的`CONFIGS`， cmake语法中，参数并不是逗号分隔，而是使用空格，required代表必需要找到, 实际上是找到LLVM.cmake这个文件，即以第一个参数区分大小写的.cmake文件
+实际find_package还有更多参数，比如HINT，尤其在本机上有多个软件版本时，用于提示cmake使用哪个版本<br><br>
+ *  `add_definitions`是cmake内置的函数，等价于Makefile中的-D，增加的两个参数含义follow官方，具体含义可以搜索得知，不过多解释。<br><br>
+ *  `set`是cmake内置的，这里设置了`CMAKE_CXX_FLAGS`，等价于Makefile中的CXX_FLAGS, 新增的几个参数含义，可以搜索得知，不过多解释。<br><br>
+ *  `message`中的内容为执行`cmake `时的调试信息， 这里主要用于人肉调试是否使用了正确的版本、变量<br><br>
+ *  `link_directories`，cmake内置，指定了链接库的路径，类似makefile中的`-L`选项，由于依赖了libxml2，且公司jumbo默认安装的版本略低，所以指定了一个自定义安装的地址<br><br>
+ *  `include_directories`，cmake内置，指定了头文件路径，类似makefile中的`-I`选项<br><br>
+ * `set_property`， cmake内置，其作用主要是因为本工程中一个是.c 文件，一个是.cpp文件，这里真的.c文件，需要指定一下<br><br>
+ * `add_executable`也是cmake内置，相当于BCLOUD的Application标签<br><br>
+ *  `target_link_libraries` 相当于BCLOUD的LIBS标签，代表需要链接哪些库， 相当于makefile的`-L`选项
+
+
+
+
+关于如何找到使用了哪些库，很多国内的文章，且不说过于老旧，而且链入了大量的无用lib，着实误人子弟。仅以本文的例子，全程参考LLVM源码中的依赖关系，去掉任何一个都会编译失败。 举个简单的例子，此处只是一个indexer，为何要依赖clangCodeGen呢，如果你不信可以删掉试试,会报这个错：
+ > `core_main.cpp:(.text._ZN5clang28ObjectFilePCHContainerReaderC2Ev[_ZN5clang28ObjectFilePCHContainerReaderC5Ev]+0x1b): undefined reference to 'vtable for clang::ObjectFilePCHContainerReader'`
+
+
+
+
+### clangd-indexer
+clangd-indexer的源码在
+如法炮制上面的依赖，这里唯一需要解决的是`make clangd install`并不会像clang一样把头文件也安装到指定的路径(这里或许有我未知的宏使能这一feature)， 不过没关系，办法总比困难多。
+我的方法是在某个include文件夹下，比如/path/toyourinclude/clang/..下面新建clangd，然后cd 到clangd的源码目录，执行 ` find . -name "*.h" -exec cp --parents {} /path/toyourinclude/clang/../clangd/ \;`即可完成头文件的安装。
+鉴于需找适合的库和clang-c没有实质性的技术差别，这里不再赘述。只需要记得clangd-indexer最重要的一个lib是libclangDaemon.a 即可。
